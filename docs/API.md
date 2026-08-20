@@ -1,4 +1,4 @@
-# RetailPulse AI — API Documentation (Phase 1 + Phase 2)
+# RetailPulse AI — API Documentation (Phase 1 + Phase 2 + Phase 3)
 
 Base URL (local dev): `http://localhost:5000/api`
 
@@ -296,16 +296,133 @@ Responses:
 
 ---
 
+## Analytics — `/api/analytics`
+
+Roles: any authenticated (`admin`, `operator`, `analyst`) — read-only, and analytics is exactly what the `analyst` role exists for.
+
+All four endpoints compute their result via a MongoDB aggregation pipeline (`$match`/`$group`/`$sort`/`$project`/`$lookup`) — never by loading raw documents into Node and reducing them in JavaScript. Computation happens close to the data.
+
+### `GET /api/analytics/summary`
+```json
+{ "success": true, "data": {
+  "totalSales": 1736.58, "totalOrders": 5, "averageOrderValue": 434.14,
+  "lowStockProductCount": 3, "outOfStockProductCount": 2
+} }
+```
+`totalSales`/`averageOrderValue` exclude `cancelled` orders; `totalOrders` counts every order regardless of status (order *volume* vs. realized *revenue* are different KPIs). Low/out-of-stock counts replicate `Inventory`'s `status` virtual (`quantity <= 0` → out of stock; `0 < quantity <= reorderThreshold` → low stock) inside the aggregation, since virtuals don't exist in raw pipeline output.
+
+### `GET /api/analytics/sales-trend?days=30`
+```json
+{ "success": true, "data": { "trend": [ { "date": "2026-08-01", "sales": 125.5, "orders": 4 }, ... ] } }
+```
+Groups non-cancelled orders by calendar day over the trailing `days` window (default 30), ascending by date.
+
+### `GET /api/analytics/top-products?limit=10`
+```json
+{ "success": true, "data": { "products": [ { "productId": "...", "productName": "...", "quantitySold": 25, "revenue": 374.75 }, ... ] } }
+```
+`$unwind`s order line items, groups by product, ranks by revenue (default `limit` 10), then `$lookup`s the product name.
+
+### `GET /api/analytics/vendor-performance`
+```json
+{ "success": true, "data": { "vendors": [ { "vendorId": "...", "name": "...", "status": "active", "productCount": 3, "orderCount": 2, "nonCancelledOrderCount": 1, "salesValue": 929.46, "averageOrderValue": 929.46 }, ... ] } }
+```
+A single pipeline `$lookup`s both a vendor's orders and products, then computes `salesValue` (non-cancelled orders only) via `$filter`/`$map`/`$sum` — the one place in this API a `$lookup` is genuinely needed, since the relationship spans two collections. `orderCount` is total order volume (every status); `nonCancelledOrderCount` is the denominator actually used for `averageOrderValue = salesValue / nonCancelledOrderCount` (0 when there are no non-cancelled orders) — keeping the average mathematically consistent with the revenue figure it's derived from, rather than diluted by cancelled orders that contributed nothing to `salesValue`.
+
+---
+
+## Predictions & Anomalies — `/api/predictions`, `/api/anomalies`
+
+### Architecture
+
+```
+MongoDB historical data (inventoryevents)
+        │
+        ▼
+Node validates product exists + caller is authorized
+        │  GET {ML_SERVICE_URL}/forecast/{productId} or /anomalies/{productId}
+        ▼
+FastAPI ML service (reads inventoryevents directly, trains, predicts)
+        │  JSON response
+        ▼
+Node validates the response shape (Zod) — rejects anything malformed
+        │
+        ▼
+MongoDB: Prediction / Anomaly persisted
+        │
+        ▼
+Client (via GET /api/predictions/:productId or GET /api/anomalies)
+```
+
+Node owns auth, RBAC, orchestration, response validation, and persistence. FastAPI owns preprocessing, feature engineering, model training/inference, and metrics. The frontend never talks to FastAPI directly — only Node does.
+
+### Forecasting methodology
+
+- **Features**: `lag_7`, `lag_14`, `rolling_mean_7` (computed on `demand.shift(1)` before rolling, so it never includes the current day), `day_of_week`, `week_of_month`.
+- **Model**: `RandomForestRegressor` (200 trees, `random_state=42`). Chosen over `HistGradientBoostingRegressor` because per-product training sets are small (tens of rows after lag warm-up is dropped) — Random Forest's bagging is more stable on small tabular data and needs no tuning to behave sensibly.
+- **Chronological split (not random)**: the model trains on all but the most recent `ML_EVAL_DAYS` (default 14) days and is evaluated only on that held-out tail. A random split would leak future rows into training — never valid for time-series data.
+- **Naive baseline**: for evaluation, `prediction[t] = actual[t-1]` (a walk-forward persistence forecast) — the standard definition of "naive" for time series, and what the model has to beat. For the genuine future forecast (where there's no new ground truth to roll forward into), it repeats the single last observed value across the whole horizon.
+- **Future forecast**: a model retrained on *all* available history predicts one day at a time, recursively feeding its own predictions back in as history for the next day's lag features — the correct, non-leaky way to do multi-step forecasting with lag features.
+- **`modelBeatsBaseline`**: `true` when the model's evaluation MAE is lower than the baseline's evaluation MAE.
+
+**Actual measured results** (seeded data, 60 days of history per product): the model beat the naive baseline on **8 of 9** seeded products. The one exception (`NWT-001`) has this project's strongest linear trend; `RandomForestRegressor` cannot extrapolate beyond the range of target values it saw during training, so on a strongly trending series the naive baseline — which by definition tracks yesterday's value, and therefore the trend — can be temporarily more competitive. This is reported honestly rather than hidden or tuned away; see the root README for the exact numbers.
+
+### Anomaly detection methodology
+
+- **Model**: `IsolationForest` (`contamination=0.1`, `random_state=42`) — an efficient unsupervised approach for flagging unusual observations when no labeled anomaly data exists (true here: nothing has been hand-labeled as "anomalous").
+- **Features**: daily demand, daily net inventory delta, rolling z-score of demand (also computed leakage-safe via `shift(1)`).
+- Isolation Forest itself has no concept of *why* a point is unusual — it only returns a score and an inlier/outlier flag. The `reason` text and `severity` are deterministic post-processing over the same features, using fixed thresholds on the demand z-score: **high** ≥ 3.0σ, **medium** ≥ 2.0σ, otherwise **low**. Never an LLM-generated explanation.
+
+### `POST /api/predictions/run`
+Roles: `admin`, `operator` (mirrors the write/operational permission used for sync in Phase 2).
+
+Request: `{ "productId": "<id>", "horizonDays": 7 }` (`horizonDays` optional, 1–30, default 7).
+
+Flow: authenticate → authorize → validate body → confirm the product exists (404 if not, and the ML service is never called) → call FastAPI → validate the response shape (reject and do not persist if malformed) → persist a `Prediction` → return it.
+
+Response `201`:
+```json
+{ "success": true, "data": { "prediction": {
+  "product": "...", "horizonDays": 7, "modelName": "RandomForestRegressor",
+  "predictedDemand": [ { "date": "2026-08-21", "value": 20.47 }, ... ],
+  "baselineForecast": [ { "date": "2026-08-21", "value": 22 }, ... ],
+  "mae": 1.83, "rmse": 2.24, "baselineMae": 4.29, "baselineRmse": 4.88,
+  "modelBeatsBaseline": true, "generatedAt": "..."
+} } }
+```
+Errors: `400` validation / insufficient historical data (`INSUFFICIENT_HISTORY`, surfaced from FastAPI) / invalid product id; `404` product not found; `502` ML service unreachable or returned an unexpected/malformed response.
+
+### `GET /api/predictions/:productId`
+Roles: any authenticated. Returns the 20 most recent persisted predictions for that product, newest first.
+
+### `POST /api/anomalies/run`
+Roles: `admin`, `operator`. Same flow as predictions. Each detected day is **upserted** by `(product, timestamp)` — re-running detection updates that day's record instead of creating a duplicate.
+
+Response `201`: `{ "data": { "anomalies": [ { "product": "...", "timestamp": "...", "score": -0.62, "reason": "...", "severity": "low" }, ... ] } }`
+
+### `GET /api/anomalies?productId=&severity=`
+Roles: any authenticated. Returns up to the 100 most recent persisted anomalies, newest first, optionally filtered by `productId` and/or `severity`.
+
+### Failure handling
+
+- **FastAPI unreachable/times out**: Node catches the connection/timeout error (an `AbortController`-based timeout, default 15s) and returns `502` — the Express process itself never crashes.
+- **FastAPI returns a malformed/unexpected response**: rejected by Zod validation before it can be persisted — Node returns `502` and writes nothing to MongoDB.
+- **Insufficient historical data**: FastAPI returns a structured `INSUFFICIENT_HISTORY` error; Node translates it into a `400` with a human-readable message rather than training (or claiming to train) a meaningless model.
+
+---
+
 ## Status codes used
 
 | Code | Meaning |
 |---|---|
 | 200 | Successful read/update/delete, or a safely-ignored duplicate webhook event |
 | 201 | Successful creation |
-| 400 | Validation failure / bad request / unresolvable external reference |
+| 400 | Validation failure / bad request / unresolvable external reference / insufficient historical data for forecasting |
 | 401 | Missing, invalid, or expired authentication (JWT or webhook secret) |
 | 403 | Authenticated but not authorized |
 | 404 | Resource not found |
 | 409 | Conflict (duplicate email/name/SKU/inventory record) |
 | 500 | Unexpected server error |
-| 502 | Upstream integration/adapter failure (sync only) |
+| 502 | Upstream integration/adapter failure (sync, or ML service unreachable/invalid response) |
+
+Note: the FastAPI ML service itself uses `422` for `INSUFFICIENT_HISTORY` and `400` for an invalid product id at its own boundary — Node always translates both into its own `400` before they reach an API client, so `422` never appears in this Node API's responses.
