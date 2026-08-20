@@ -64,12 +64,25 @@ const orderSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
+    externalSource: {
+      type: String,
+      trim: true,
+    },
+    externalId: {
+      type: String,
+      trim: true,
+    },
   },
   { timestamps: true }
 );
 
 orderSchema.index({ vendor: 1 });
 orderSchema.index({ status: 1 });
+// Prevents a repeated sync/webhook from creating a second order for the same external order.
+orderSchema.index(
+  { externalSource: 1, externalId: 1 },
+  { unique: true, partialFilterExpression: { externalId: { $type: 'string' } } }
+);
 
 orderSchema.pre('validate', function generateOrderNumber(next) {
   if (!this.orderNumber) {
