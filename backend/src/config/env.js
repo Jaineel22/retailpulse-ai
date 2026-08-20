@@ -21,4 +21,7 @@ module.exports = {
   jwtSecret: process.env.JWT_SECRET,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '1d',
   corsOrigin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()) : true,
+  // Not a real secret — protects the local/demo mock-commerce webhook endpoint only.
+  // Safe to default so Phase 2 works out of the box; override in real deployments.
+  mockCommerceWebhookSecret: process.env.MOCK_COMMERCE_WEBHOOK_SECRET || 'local-dev-mock-webhook-secret',
 };

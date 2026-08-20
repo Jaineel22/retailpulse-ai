@@ -31,6 +31,10 @@ class ApiError extends Error {
   static internal(message = 'Internal server error') {
     return new ApiError(500, message);
   }
+
+  static badGateway(message = 'Upstream service error') {
+    return new ApiError(502, message);
+  }
 }
 
 module.exports = ApiError;
