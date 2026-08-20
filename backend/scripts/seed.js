@@ -13,6 +13,9 @@ const Vendor = require('../src/models/Vendor');
 const Product = require('../src/models/Product');
 const Inventory = require('../src/models/Inventory');
 const { Order } = require('../src/models/Order');
+const { Integration } = require('../src/models/Integration');
+const { SyncLog } = require('../src/models/SyncLog');
+const { WebhookEvent } = require('../src/models/WebhookEvent');
 
 const SALT_ROUNDS = 10;
 
@@ -92,13 +95,16 @@ async function seed() {
   await connectDB(env.mongodbUri);
   console.log(`Connected to ${env.mongodbUri}`);
 
-  console.log('Clearing existing Phase 1 collections...');
+  console.log('Clearing existing collections...');
   await Promise.all([
     User.deleteMany({}),
     Vendor.deleteMany({}),
     Product.deleteMany({}),
     Inventory.deleteMany({}),
     Order.deleteMany({}),
+    Integration.deleteMany({}),
+    SyncLog.deleteMany({}),
+    WebhookEvent.deleteMany({}),
   ]);
 
   console.log('Seeding users...');
@@ -108,6 +114,7 @@ async function seed() {
     const user = await User.create({ name: u.name, email: u.email, password, role: u.role });
     users.push(user);
   }
+  const adminUser = users.find((u) => u.role === 'admin');
   const operatorUser = users.find((u) => u.role === 'operator');
 
   console.log('Seeding vendors...');
@@ -152,12 +159,26 @@ async function seed() {
     });
   }
 
+  console.log('Seeding integration...');
+  const integration = await Integration.create({
+    name: 'Mock Commerce (Primary)',
+    provider: 'mock-commerce',
+    isActive: true,
+    config: {
+      defaultVendor: vendorsByName['Northwind Traders']._id,
+      pageSize: 2,
+      simulateFailure: false,
+    },
+    createdBy: adminUser._id,
+  });
+
   console.log('\nSeed complete:');
-  console.log(`  Users:     ${SEED_USERS.length}`);
-  console.log(`  Vendors:   ${SEED_VENDORS.length}`);
-  console.log(`  Products:  ${Object.keys(productsBySku).length}`);
-  console.log(`  Inventory: ${Object.keys(SEED_INVENTORY_BY_SKU).length}`);
-  console.log(`  Orders:    ${SEED_ORDERS.length}`);
+  console.log(`  Users:       ${SEED_USERS.length}`);
+  console.log(`  Vendors:     ${SEED_VENDORS.length}`);
+  console.log(`  Products:    ${Object.keys(productsBySku).length}`);
+  console.log(`  Inventory:   ${Object.keys(SEED_INVENTORY_BY_SKU).length}`);
+  console.log(`  Orders:      ${SEED_ORDERS.length}`);
+  console.log(`  Integration: ${integration.name} (${integration._id})`);
   console.log('\nDev login credentials (local development only):');
   for (const u of SEED_USERS) {
     console.log(`  ${u.role.padEnd(8)} ${u.email} / ${u.password}`);
