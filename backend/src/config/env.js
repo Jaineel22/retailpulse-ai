@@ -30,4 +30,10 @@ module.exports = {
   // Optional (SHOULD HAVE) periodic prediction/anomaly run — off by default.
   enablePredictionCron: process.env.ENABLE_PREDICTION_CRON === 'true',
   predictionCronSchedule: process.env.PREDICTION_CRON_SCHEDULE || '0 3 * * *',
+  // Phase 4: Gemini LLM provider for the retrieval-grounded AI assistant.
+  // Deliberately NOT in `required` above — a missing key must fail the single
+  // /api/ai/ask endpoint gracefully (503), not crash the whole application.
+  geminiApiKey: process.env.GEMINI_API_KEY || '',
+  geminiModel: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
+  aiTimeoutMs: parseInt(process.env.AI_TIMEOUT_MS, 10) || 15000,
 };

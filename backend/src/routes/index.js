@@ -11,6 +11,8 @@ const webhookRoutes = require('./webhook.routes');
 const analyticsRoutes = require('./analytics.routes');
 const predictionRoutes = require('./prediction.routes');
 const anomalyRoutes = require('./anomaly.routes');
+const recommendationRoutes = require('./recommendation.routes');
+const aiRoutes = require('./ai.routes');
 
 const router = express.Router();
 
@@ -25,5 +27,7 @@ router.use('/webhooks', webhookRoutes);
 router.use('/analytics', analyticsRoutes);
 router.use('/predictions', predictionRoutes);
 router.use('/anomalies', anomalyRoutes);
+router.use('/recommendations', recommendationRoutes);
+router.use('/ai', aiRoutes);
 
 module.exports = router;

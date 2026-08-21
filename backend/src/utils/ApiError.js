@@ -35,6 +35,10 @@ class ApiError extends Error {
   static badGateway(message = 'Upstream service error') {
     return new ApiError(502, message);
   }
+
+  static serviceUnavailable(message = 'Service unavailable') {
+    return new ApiError(503, message);
+  }
 }
 
 module.exports = ApiError;
