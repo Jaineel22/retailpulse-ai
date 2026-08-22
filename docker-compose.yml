@@ -1,0 +1,83 @@
+# RetailPulse AI — local/demo full-stack orchestration.
+#
+# MongoDB is deliberately NOT a service here — it has been an external
+# dependency since Phase 1 (reached via MONGODB_URI), and stays that way:
+# point it at MongoDB running on the host, a separate `docker run mongo`,
+# or MongoDB Atlas. See README.md's Docker section for all three options.
+#
+# Copy .env.example to .env at the repo root and fill in real values before
+# running `docker compose up --build`.
+
+services:
+  ml-service:
+    build: ./ml-service
+    environment:
+      MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI in your root .env file}
+      ML_SERVICE_HOST: 0.0.0.0
+      ML_SERVICE_PORT: 8000
+      ML_MIN_HISTORY_DAYS: ${ML_MIN_HISTORY_DAYS:-21}
+      ML_EVAL_DAYS: ${ML_EVAL_DAYS:-14}
+      ML_DEFAULT_HORIZON_DAYS: ${ML_DEFAULT_HORIZON_DAYS:-7}
+      ML_MAX_HORIZON_DAYS: ${ML_MAX_HORIZON_DAYS:-30}
+    ports:
+      - '8000:8000'
+    # Lets MONGODB_URI point at "host.docker.internal" for a MongoDB running
+    # directly on the host machine, on Linux too (Docker Desktop on Mac/Windows
+    # supports this out of the box).
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI in your root .env file}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in your root .env file — a long random string, never the .env.example placeholder}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1d}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      MOCK_COMMERCE_WEBHOOK_SECRET: ${MOCK_COMMERCE_WEBHOOK_SECRET:-local-dev-mock-webhook-secret}
+      ML_SERVICE_URL: http://ml-service:8000
+      ML_SERVICE_TIMEOUT_MS: ${ML_SERVICE_TIMEOUT_MS:-15000}
+      ENABLE_PREDICTION_CRON: ${ENABLE_PREDICTION_CRON:-false}
+      PREDICTION_CRON_SCHEDULE: ${PREDICTION_CRON_SCHEDULE:-0 3 * * *}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-15000}
+    ports:
+      - '5000:5000'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    depends_on:
+      - ml-service
+    healthcheck:
+      test: ['CMD', 'node', '-e', "require('http').get('http://localhost:5000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:5000/api}
+    ports:
+      - '5173:80'
+    depends_on:
+      - backend
+    healthcheck:
+      test: ['CMD', 'wget', '--quiet', '--spider', 'http://localhost/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
