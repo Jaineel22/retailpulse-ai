@@ -1,7 +1,10 @@
 # RetailPulse AI ML service — Phase 3
 # Core service
-fastapi>=0.115,<0.116
-uvicorn[standard]>=0.30,<0.31
+# Lower bounds raised in Phase 5 to the first version with a patched starlette
+# (fastapi>=0.116 pulls in starlette>=1.0, which fixes multiple CVEs found via
+# `pip-audit` against the previously-pinned fastapi<0.116/starlette 0.46.2).
+fastapi>=0.116
+uvicorn[standard]>=0.30
 pydantic>=2.7,<3.0
 python-dotenv>=1.0,<2.0
 
@@ -14,6 +17,7 @@ scikit-learn>=1.5,<1.6
 pymongo>=4.7,<5.0
 
 # Testing (pytest is required by the Phase 3 blueprint; httpx is needed for
-# FastAPI's TestClient)
-pytest>=8.2,<9.0
+# FastAPI's TestClient). pytest floor raised in Phase 5 to the version fixing
+# PYSEC-2026-1845 (dev/test-only — never shipped with the running service).
+pytest>=9.0.3
 httpx>=0.27,<0.28
