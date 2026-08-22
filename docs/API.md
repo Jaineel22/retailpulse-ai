@@ -1,4 +1,4 @@
-# RetailPulse AI — API Documentation (Phase 1 + Phase 2 + Phase 3 + Phase 4)
+# RetailPulse AI — API Documentation
 
 Base URL (local dev): `http://localhost:5000/api`
 
@@ -7,6 +7,17 @@ All request/response bodies are JSON. Authenticated routes require:
 ```
 Authorization: Bearer <jwt>
 ```
+
+## Health checks
+
+Unauthenticated, used by Docker healthchecks and uptime monitoring — see `docker-compose.yml`.
+
+| Service | Endpoint | Response |
+|---|---|---|
+| Backend | `GET /health` (not under `/api`) | `{ "success": true, "message": "RetailPulse AI API is healthy" }` |
+| ML service | `GET /health` | `{ "status": "ok", "service": "retailpulse-ml-service" }` |
+
+Neither checks MongoDB/downstream connectivity — they confirm the process itself is up and accepting requests. The backend's own startup sequence already fails fast if it can't reach MongoDB (see `src/server.js`).
 
 ## Response envelope
 

@@ -14,13 +14,31 @@ for (const key of required) {
   }
 }
 
+const nodeEnv = process.env.NODE_ENV || 'development';
+
+function resolveCorsOrigin() {
+  if (process.env.CORS_ORIGIN) {
+    return process.env.CORS_ORIGIN.split(',').map((o) => o.trim());
+  }
+  if (nodeEnv === 'production') {
+    // Fail closed, not open: an unset CORS_ORIGIN in production must not
+    // silently reflect every Origin header. Loud and blocked beats quiet and permissive.
+    // eslint-disable-next-line no-console
+    console.warn(
+      'WARNING: CORS_ORIGIN is not set in production — cross-origin requests will be blocked by default. Set CORS_ORIGIN to your frontend URL(s).'
+    );
+    return false;
+  }
+  return true; // dev/test convenience only
+}
+
 module.exports = {
-  nodeEnv: process.env.NODE_ENV || 'development',
+  nodeEnv,
   port: parseInt(process.env.PORT, 10) || 5000,
   mongodbUri: process.env.MONGODB_URI,
   jwtSecret: process.env.JWT_SECRET,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '1d',
-  corsOrigin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()) : true,
+  corsOrigin: resolveCorsOrigin(),
   // Not a real secret — protects the local/demo mock-commerce webhook endpoint only.
   // Safe to default so Phase 2 works out of the box; override in real deployments.
   mockCommerceWebhookSecret: process.env.MOCK_COMMERCE_WEBHOOK_SECRET || 'local-dev-mock-webhook-secret',
@@ -34,6 +52,10 @@ module.exports = {
   // Deliberately NOT in `required` above — a missing key must fail the single
   // /api/ai/ask endpoint gracefully (503), not crash the whole application.
   geminiApiKey: process.env.GEMINI_API_KEY || '',
-  geminiModel: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
+  // 'gemini-2.0-flash' was retired by Google (confirmed via a live 404 from
+  // the API itself, which named this as the replacement) — the fallback
+  // default must not point at a dead model for any deployment that leaves
+  // GEMINI_MODEL unset.
+  geminiModel: process.env.GEMINI_MODEL || 'gemini-3.6-flash',
   aiTimeoutMs: parseInt(process.env.AI_TIMEOUT_MS, 10) || 15000,
 };
